@@ -330,7 +330,6 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
 
         # get finetune matrix for object
         finetune_matrix = ecc_registration(object_thermal, temp_object_visible, is_thermal_reference, warp_mode=cv2.MOTION_TRANSLATION)
-        print(previous_finetune_matrix)
         if finetune_matrix is not None:
             if previous_finetune_matrix is not None:
                 finetune_matrix[0, 2] =  finetune_matrix[0, 2] + previous_finetune_matrix[0, 2]
@@ -339,20 +338,17 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
             # check correlation coef score and return the result
             finetuned_temp_object_visible = cv2.warpAffine(object_visible, finetune_matrix, (object_thermal.shape[1], object_thermal.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
             if np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(finetuned_temp_object_visible))) > np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(temp_object_visible))):
-                print("aaa")
                 finetuned_visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
                 return finetuned_visible, finetune_matrix, box
             elif np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(temp_object_visible))) > np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(object_visible))):
-                print("bbb")
                 return temp_visible, previous_finetune_matrix, box
             else:
-                print("ccc") 
                 return visible, previous_finetune_matrix, box
             
     # there is no target area, apply ecc only
     if box is None or finetune_matrix is None:
         visible = cv2.warpAffine(visible, initial_transformation_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-        finetune_matrix = ecc_registration(thermal, visible, is_thermal_reference, warp_mode=cv2.MOTION_AFFINE)
+        finetune_matrix = ecc_registration(thermal, visible, is_thermal_reference, warp_mode=cv2.MOTION_TRANSLATION)
         if finetune_matrix is None:
             raise Exception("Cannot register with ECC! Exiting program...")
         visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
