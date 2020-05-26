@@ -102,7 +102,7 @@ def preprocess_images(template_img, register_img, is_thermal_reference):
         # template_img_gray = cv2.filter2D(template_img_gray, -1, kernel)
 
         # invert visible image
-        template_img_gray = cv2.bitwise_not(template_img_gray)
+        # template_img_gray = cv2.bitwise_not(template_img_gray)
 
         # convert to binary image
         # _, template_img_gray = cv2.threshold(template_img_gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
@@ -277,17 +277,10 @@ def get_box_from_object_detection(detector, custom, fused):
         return None
 
     # get biggest bounding boxes (closest object)
-    final_bounding_box = after_registration_detections[0]["box_points"]
-    max_area = (final_bounding_box[2] - final_bounding_box[0]) * (final_bounding_box[3] - final_bounding_box[1])
     if len(after_registration_detections) > 1:
-        for bounding_box in after_registration_detections:
-            local_width = bounding_box["box_points"][2] - bounding_box["box_points"][0]
-            local_height = bounding_box["box_points"][3] - bounding_box["box_points"][1]
-            local_area = local_width * local_height
-            if(local_area > max_area):
-                final_bounding_box = bounding_box["box_points"]
-                max_area = local_area
-
+        after_registration_detections = sorted(after_registration_detections, key=sort_by_bb_area, reverse=True)
+    
+    final_bounding_box = after_registration_detections[0]["box_points"]
     # set bounding boxes location
     x1 = final_bounding_box[0] - 50
     y1 = final_bounding_box[1] - 50
@@ -299,6 +292,9 @@ def get_box_from_object_detection(detector, custom, fused):
 
     return (start_point[0], start_point[1], end_point[0] - start_point[0], end_point[1] - start_point[1])
 
+def sort_by_bb_area(object_detection):
+    bounding_box = object_detection["box_points"]
+    return (bounding_box[2] - bounding_box[0]) * (bounding_box[3] - bounding_box[1])
 
 def finetune_registration(thermal, visible, is_thermal_reference, initial_transformation_matrix, previous_finetune_matrix, box):
     (h, w) = visible.shape[:2]
@@ -310,17 +306,14 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
             temp_visible = cv2.warpAffine(visible, previous_finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
         else:
             temp_visible = visible
-        (x, y, del_x, del_y) = [int(v) for v in box]
 
+        (x, y, del_x, del_y) = [int(v) for v in box]
         x1 = x if x > 0 else 0
         y1 = y if y > 0 else 0
-        
         x2 = x1 + del_x
         y2 = y1 + del_y
-
         x2 = x2 if x2 < w-1 else w-1
         y2 = y2 if y2 < h-1 else h-1
-
         start_point = (x1, y1)
         end_point = (x2, y2)
 
@@ -337,14 +330,14 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
 
             # check correlation coef score and return the result
             finetuned_temp_object_visible = cv2.warpAffine(object_visible, finetune_matrix, (object_thermal.shape[1], object_thermal.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-            if np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(finetuned_temp_object_visible))) > np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(temp_object_visible))):
-                finetuned_visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-                return finetuned_visible, finetune_matrix, box
-            elif np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(temp_object_visible))) > np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(object_visible))):
-                return temp_visible, previous_finetune_matrix, box
-            else:
-                return visible, previous_finetune_matrix, box
-            
+            results = [(object_thermal, finetuned_temp_object_visible, finetune_matrix, box, "1"), (object_thermal, temp_object_visible, previous_finetune_matrix, box, "2"), (object_thermal, object_visible, previous_finetune_matrix, box, "3")]
+            results = sorted(results, key = sort_by_coef_score, reverse=True)
+
+            final_finetune_matrix = results[0][2]
+            box = results[0][3]
+            finetuned_visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+            return finetuned_visible, final_finetune_matrix, box
+
     # there is no target area, apply ecc only
     if box is None or finetune_matrix is None:
         visible = cv2.warpAffine(visible, initial_transformation_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
@@ -353,6 +346,9 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
             raise Exception("Cannot register with ECC! Exiting program...")
         visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
         return visible, finetune_matrix, None
+
+def sort_by_coef_score(result):
+    return np.abs(calculate_correlation_coef(fixBorder(result[0]), fixBorder(result[1])))
 
 def run(detector, custom, thermal_video_path, visible_video_path, output_video, is_thermal_reference):
     thermal_cap = cv2.VideoCapture(thermal_video_path)
@@ -395,7 +391,7 @@ def run(detector, custom, thermal_video_path, visible_video_path, output_video, 
         if thermal_frame is None or visible_frame is None:
             break
 
-        # if index < 130:
+        # if index < 450:
         #     index += 1
         #     continue
         
@@ -420,7 +416,7 @@ def run(detector, custom, thermal_video_path, visible_video_path, output_video, 
         cv2.imshow("After Initial Registration", cv2.resize(after_registration, (800, 500)))
         key = cv2.waitKey(1) & 0xFF
 
-        # box = get_box_from_object_detection(detector, custom, after_registration)
+        box = get_box_from_object_detection(detector, custom, after_registration)
         if initBB is not None:
             (tracking_success, box) = tracker.update(thermal_frame)
             if not tracking_success:
@@ -497,6 +493,10 @@ if __name__ == "__main__":
     # thermal_video_path = "./sneaking_thermal.mp4"
     # visible_video_path = "./sneaking_visible.avi"
     # output_video = "./auto_registration_sneaking.avi"
+    
+    # thermal_video_path = "./fighting_thermal.mp4"
+    # visible_video_path = "./fighting_visible.avi"
+    # output_video = "./auto_registration_fighting.avi"
 
     # run auto registration
     run(detector, custom, thermal_video_path, visible_video_path, output_video, is_thermal_reference)
