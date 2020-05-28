@@ -114,9 +114,9 @@ def preprocess_images(template_img, register_img, is_thermal_reference):
     template_img_gray = cv2.fastNlMeansDenoising(template_img_gray, None, 5, 21)
     register_img_gray = cv2.fastNlMeansDenoising(register_img_gray, None, 5, 21)
 
-    # kernel = np.ones((5, 5), np.uint8)
-    # template_img_gray = cv2.morphologyEx(template_img_gray, cv2.MORPH_OPEN, kernel)
-    # register_img_gray = cv2.morphologyEx(register_img_gray, cv2.MORPH_OPEN, kernel)
+    kernel = np.ones((5, 5), np.uint8)
+    template_img_gray = cv2.morphologyEx(template_img_gray, cv2.MORPH_OPEN, kernel)
+    register_img_gray = cv2.morphologyEx(register_img_gray, cv2.MORPH_OPEN, kernel)
 
     # template_img_gray = auto_canny(template_img_gray)
     # register_img_gray = auto_canny(register_img_gray)
@@ -329,14 +329,31 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
                 finetune_matrix[1, 2] =  finetune_matrix[1, 2] + previous_finetune_matrix[1, 2]
 
             # check correlation coef score and return the result
+
             finetuned_temp_object_visible = cv2.warpAffine(object_visible, finetune_matrix, (object_thermal.shape[1], object_thermal.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+
+            # print(np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(finetuned_temp_object_visible))))
+            # print(np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(temp_object_visible))))
+            # print(np.abs(calculate_correlation_coef(fixBorder(object_thermal), fixBorder(object_visible))))
+
             results = [(object_thermal, finetuned_temp_object_visible, finetune_matrix, box, "1"), (object_thermal, temp_object_visible, previous_finetune_matrix, box, "2"), (object_thermal, object_visible, previous_finetune_matrix, box, "3")]
             results = sorted(results, key = sort_by_coef_score, reverse=True)
 
+            # for r in results:
+            #     print(r[4])
+
             final_finetune_matrix = results[0][2]
             box = results[0][3]
-            finetuned_visible = cv2.warpAffine(visible, finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-            return finetuned_visible, final_finetune_matrix, box
+            case = results[0][4]
+
+            # cv2.imshow("aaa", cv2.addWeighted(object_thermal, 0.5, results[0][1], 0.5, 0.0))
+            # cv2.waitKey()
+
+            if case == "3" or final_finetune_matrix is None:
+                finetuned_visible = visible
+            else:
+                finetuned_visible = cv2.warpAffine(visible, final_finetune_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+            return finetuned_visible, final_finetune_matrix, box    
 
     # there is no target area, apply ecc only
     if box is None or finetune_matrix is None:
@@ -391,7 +408,7 @@ def run(detector, custom, thermal_video_path, visible_video_path, output_video, 
         if thermal_frame is None or visible_frame is None:
             break
 
-        # if index < 450:
+        # if index < 590:
         #     index += 1
         #     continue
         
@@ -486,17 +503,21 @@ if __name__ == "__main__":
     # visible_video_path = "./440/visible_440.avi"
     # output_video = "./auto_registration_440.avi"
 
-    thermal_video_path = "./560/thermal_560.avi"
-    visible_video_path = "./560/visible_560.avi"
-    output_video = "./auto_registration_560.avi"
+    # thermal_video_path = "./560/thermal_560.avi"
+    # visible_video_path = "./560/visible_560.avi"
+    # output_video = "./auto_registration_560.avi"
 
     # thermal_video_path = "./sneaking_thermal.mp4"
     # visible_video_path = "./sneaking_visible.avi"
     # output_video = "./auto_registration_sneaking.avi"
     
     # thermal_video_path = "./fighting_thermal.mp4"
-    # visible_video_path = "./fighting_visible.avi"
+    # visible_video_path = sssssssssssssssssss"./fighting_visible.avi"
     # output_video = "./auto_registration_fighting.avi"
+
+    thermal_video_path = "./multi_targets_thermal.avi"
+    visible_video_path = "./multi_targets_visible.avi"
+    output_video = "./multi_targets_fused.avi"
 
     # run auto registration
     run(detector, custom, thermal_video_path, visible_video_path, output_video, is_thermal_reference)
