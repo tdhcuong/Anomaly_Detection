@@ -6,11 +6,13 @@ import time
 import sys
 import numpy as np
 
-from imageai.Detection import ObjectDetection
 from skimage.exposure import adjust_gamma
 from imutils.video import FPS
 from align import ecc_registration
-from utils import mutual_information_2d, fixBorder
+from utils import mutual_information_2d, fixBorder, non_max_suppression
+from yolo import YOLO
+from PIL import Image
+from detection import Detection
 
 # import dlib
 # from skimage.measure import shannon_entropy, compare_ssim
@@ -18,55 +20,50 @@ from utils import mutual_information_2d, fixBorder
 # from mi_reg import main_mi_reg
 # from poc_reg import main_poc_reg
 
-def get_box_from_object_detection(detector, custom, image):
+def get_box_from_object_detection(yolo, image):
     (h, w) = image.shape[:2]
     center_point = (int(w/2), int(h/2))
-    detections = []
+    final_detections = []
 
-    after_registration_object, after_registration_detections = detector.detectCustomObjectsFromImage(custom_objects = custom,
-            input_type = "array",
-            input_image = image,
-            output_type = "array",
-            minimum_percentage_probability=50)
+    image = Image.fromarray(image[...,::-1])  # bgr to rgb
+    boxes, confidence, classes = yolo.detect_image(image)
+
+    detections = [Detection(bbox, confidence, cls) for bbox, confidence, cls in
+                      zip(boxes, confidence, classes)]
+
+    # Run non-maxima suppression.
+    boxes = np.array([d.tlwh for d in detections])
+    scores = np.array([d.confidence for d in detections])
+    classes = np.array([d.cls for d in detections])
+    indices = non_max_suppression(boxes, 1.0, scores)
+    detections = [detections[i] for i in indices if detections[i].cls == "person"]
     
     # cv2.imshow("Bounding Box", cv2.resize(after_registration_object, (800, 500)))
     # cv2.waitKey(1)
 
-    if len(after_registration_detections) == 0 :
+    if len(detections) == 0 :
         print("No human object detection!")
         return None
 
-    for detection in after_registration_detections:
-        start_x = detection["box_points"][0] - 30
-        end_x = detection["box_points"][2] + 30
+    for detection in detections:
+        start_x, _, end_x, _ = detection.to_tlbr() 
 
         # Registration only on the center area of image
         if end_x < center_point[0] or start_x > center_point[0]:
             continue
-        detections.append(detection)
+        final_detections.append(detection)
 
     # get biggest bounding boxes (closest object)
-    if len(detections) >= 1:
-        detections = sorted(detections, key=sort_by_bb_area, reverse=True)
+    if len(final_detections) >= 1:
+        final_detections = sorted(final_detections, key=sort_by_bb_area, reverse=True)
     else:
         return None
-    
-    final_bounding_box = detections[0]["box_points"]
 
-    # set bounding boxes location
-    x1 = final_bounding_box[0] - 30
-    y1 = final_bounding_box[1] - 30
-    x2 = final_bounding_box[2] + 30
-    y2 = final_bounding_box[3] + 30
-    
-    start_point = (x1 if x1 > 0 else 0, y1 if y1 > 0 else 0)
-    end_point = (x2 if x2 < w-1 else w-1, y2 if y2 < h-1 else h-1)
-
-    return (start_point[0], start_point[1], end_point[0] - start_point[0], end_point[1] - start_point[1])
+    return final_detections[0].tlwh
 
 def sort_by_bb_area(object_detection):
-    bounding_box = object_detection["box_points"]
-    return (bounding_box[2] - bounding_box[0]) * (bounding_box[3] - bounding_box[1])
+    _, _, w, h = object_detection.tlwh
+    return w*h
 
 def finetune_registration(thermal, visible, is_thermal_reference, initial_transformation_matrix, previous_finetune_matrix, box):
     (h, w) = visible.shape[:2]
@@ -102,7 +99,6 @@ def finetune_registration(thermal, visible, is_thermal_reference, initial_transf
             
         # get finetune matrix for object
         finetune_matrix = ecc_registration(object_thermal, temp_object_visible, is_thermal_reference, warp_mode=cv2.MOTION_TRANSLATION)
-        # if finetune_matrix is not None or segmented_finetune_matrix is not None:
         if finetune_matrix is not None:
             if previous_finetune_matrix is not None:
                 finetune_matrix[0, 2] =  finetune_matrix[0, 2] + previous_finetune_matrix[0, 2]
@@ -186,7 +182,7 @@ def get_initial_transformaton_matrix(thermal_cap, visible_cap, frame_count, is_t
 
     return initial_matrix
 
-def run(detector, custom, thermal_video_path, visible_video_path, output_video, combined_output_video, is_thermal_reference):
+def run(yolo, thermal_video_path, visible_video_path, output_video, combined_output_video, is_thermal_reference):
     thermal_cap = cv2.VideoCapture(thermal_video_path)
     visible_cap = cv2.VideoCapture(visible_video_path)
 
@@ -290,9 +286,9 @@ def run(detector, custom, thermal_video_path, visible_video_path, output_video, 
             # box = (startX, startY, endX-startX, endY-startY)
 
             if not tracking_success:
-                box = get_box_from_object_detection(detector, custom, after_registration)
+                box = get_box_from_object_detection(yolo, after_registration)
         else:
-            box = get_box_from_object_detection(detector, custom, after_registration)
+            box = get_box_from_object_detection(yolo, after_registration)
 
         # finetune registration
         finetuned_visible_frame, finetune_matrix = finetune_registration(thermal_frame, registered_visible_frame, is_thermal_reference, initial_transformation_matrix, finetune_matrix, box)
@@ -336,13 +332,8 @@ if __name__ == "__main__":
     # set if thermal is template image
     is_thermal_reference = True
 
-    # init YOLOv3 object detector for person
-    execution_path = os.getcwd()
-    detector = ObjectDetection()
-    detector.setModelTypeAsYOLOv3()
-    detector.setModelPath(os.path.join(execution_path , "yolo.h5"))
-    detector.loadModel()
-    custom = detector.CustomObjects(person=True)
+    # init YOLOv4 object detector for person
+    yolo = YOLO()
 
     # paths to videos
     # thermal_video_path = "../440/thermal_440.avi"
@@ -376,4 +367,4 @@ if __name__ == "__main__":
     output_video = "../result_videos/ped1.avi"
 
     # run auto registration
-    run(detector, custom, thermal_video_path, visible_video_path, output_video, combined_output_video, is_thermal_reference)
+    run(yolo, thermal_video_path, visible_video_path, output_video, combined_output_video, is_thermal_reference)
