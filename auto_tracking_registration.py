@@ -36,7 +36,7 @@ def get_box_from_object_detection(yolo, image):
     scores = np.array([d.confidence for d in detections])
     classes = np.array([d.cls for d in detections])
     indices = non_max_suppression(boxes, 1.0, scores)
-    detections = [detections[i] for i in indices if detections[i].cls == "person"]
+    detections = [detections[i] for i in indices]
     
     # cv2.imshow("Bounding Box", cv2.resize(after_registration_object, (800, 500)))
     # cv2.waitKey(1)
